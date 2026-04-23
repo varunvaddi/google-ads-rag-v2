@@ -176,3 +176,93 @@ def retriever_node(state: RAGState) -> Dict[str, Any]:
         "latency_ms": latency,
         "node_trace": trace,
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node 3: Reranker
+# ─────────────────────────────────────────────────────────────────────────────
+
+def reranker_node(state: RAGState) -> Dict[str, Any]:
+    """
+    Reads rerank scores from retrieved chunks and decides retrieval quality.
+
+    Cross-encoder reranking already happened inside HybridSearch.search().
+    This node's job is to:
+      1. Extract the scores
+      2. Decide if quality is good enough to proceed to LLM
+      3. Set needs_more_retrieval flag for the conditional edge
+
+    INPUT  (reads from state): retrieved_chunks, retrieval_attempts
+    OUTPUT (writes to state):  reranked_chunks, retrieval_scores,
+                               needs_more_retrieval, latency_ms, node_trace
+
+    ROUTING LOGIC:
+      top_score >= 0.001 AND attempts < 2  → proceed to LLM
+      top_score <  0.001 AND attempts < 2  → retry retrieval
+      attempts >= 2                         → proceed anyway (avoid infinite loop)
+    """
+    t0 = time.time()
+    chunks = state.get("retrieved_chunks", [])
+    attempts = state.get("retrieval_attempts", 1)
+
+    # Extract rerank scores from chunks
+    # rerank_score is set by cross-encoder inside HybridSearch
+    scores = [
+        chunk.get("rerank_score", chunk.get("combined_score", 0.0))
+        for chunk in chunks
+    ]
+
+    top_score = scores[0] if scores else 0.0
+
+    print(f"\n[Reranker] {len(chunks)} chunks | top_score={top_score:.4f} | attempts={attempts}")
+
+    # Print top 3 with their scores and hierarchy
+    for i, (chunk, score) in enumerate(zip(chunks[:3], scores[:3]), 1):
+        hierarchy = " > ".join(chunk.get("metadata", {}).get("hierarchy", []))
+        print(f"  {i}. [{score:.4f}] {hierarchy[:55]}")
+
+    # ── Routing decision ──────────────────────────────────────────────────
+    # THRESHOLD: 0.001 is the minimum acceptable rerank score
+    # Below this = cross-encoder found no meaningful relevance
+    # Above this = at least one chunk is genuinely relevant
+    QUALITY_THRESHOLD = 0.001
+
+    if top_score < QUALITY_THRESHOLD and attempts < 2:
+        # Quality too low AND we haven't retried yet → retry
+        needs_more = True
+        print(f"[Reranker] score {top_score:.4f} < {QUALITY_THRESHOLD} → RETRY retrieval")
+    else:
+        # Either quality is OK, or we've already retried → proceed
+        needs_more = False
+        reason = "quality OK" if top_score >= QUALITY_THRESHOLD else "max attempts reached"
+        print(f"[Reranker] {reason} → PROCEED to LLM")
+
+    # ── Observability ─────────────────────────────────────────────────────
+    latency = state.get("latency_ms") or {}
+    latency["reranker"] = round((time.time() - t0) * 1000, 1)
+
+    trace = state.get("node_trace") or []
+    trace.append("reranker")
+
+    return {
+        "reranked_chunks": chunks,       # same chunks — scores already inside them
+        "retrieval_scores": scores,
+        "needs_more_retrieval": needs_more,
+        "latency_ms": latency,
+        "node_trace": trace,
+    }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditional Edge: after reranker, retry or proceed?
+# ─────────────────────────────────────────────────────────────────────────────
+
+def should_retrieve_more(state: RAGState) -> str:
+    """
+    Called by LangGraph after reranker_node runs.
+    Returns a string — the name of the next node.
+
+    "retriever"     → go back and retry with wider search
+    "llm_generator" → quality is good, proceed to generation
+    """
+    if state.get("needs_more_retrieval", False):
+        return "retriever"
+    return "llm_generator"
