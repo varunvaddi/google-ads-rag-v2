@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+rag-env/
+
+# Data files (too large for git)
+data/raw/
+data/embeddings/
+*.npy
+*.index
+*.pkl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Environment variables
+.env
+
+# Evaluation outputs (generated, not source)
+evaluation/evaluation_results.json
+evaluation/eval_dataset.json
