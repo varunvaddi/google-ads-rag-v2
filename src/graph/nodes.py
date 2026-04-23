@@ -266,3 +266,104 @@ def should_retrieve_more(state: RAGState) -> str:
     if state.get("needs_more_retrieval", False):
         return "retriever"
     return "llm_generator"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Singleton loader — loads Ollama LLM once
+# ─────────────────────────────────────────────────────────────────────────────
+
+_llm = None
+
+def _get_llm():
+    """
+    Lazy singleton for ChatOllama.
+    Connects to Ollama server running locally on port 11434.
+    No API key, no rate limits, free forever.
+    """
+    global _llm
+    if _llm is None:
+        from langchain_ollama import ChatOllama
+        from src.generation.decision_schema import PolicyDecision
+        print("[LLMGenerator] Connecting to Ollama llama3.2...")
+        llm = ChatOllama(
+            model="llama3.2",
+            temperature=0.1,    # Low = consistent decisions
+            num_predict=1024,   # Max tokens in response
+        )
+        _llm = llm.with_structured_output(PolicyDecision)
+        print("[LLMGenerator] Connected!")
+    return _llm
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node 4: LLM Generator
+# ─────────────────────────────────────────────────────────────────────────────
+
+def llm_generator_node(state: RAGState) -> Dict[str, Any]:
+    """
+    Calls Ollama llama3.2 with retrieved policy context.
+    Returns a structured PolicyDecision object directly.
+
+    Replaces GeminiPolicyEngine from v1.
+    Same prompts from src/generation/prompts.py — nothing changed there.
+
+    INPUT  (reads from state): reranked_chunks, query
+    OUTPUT (writes to state):  decision, raw_llm_response, latency_ms, node_trace
+    """
+    t0 = time.time()
+
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from src.generation.prompts import format_policy_review_prompt
+
+    structured_llm = _get_llm()
+
+    # Use reranked chunks if available, fall back to retrieved
+    chunks = state.get("reranked_chunks") or state.get("retrieved_chunks", [])
+    query = state["query"]
+
+    print(f"\n[LLMGenerator] Calling Ollama llama3.2...")
+    print(f"[LLMGenerator] query: '{query[:60]}'")
+    print(f"[LLMGenerator] context: {len(chunks)} chunks")
+
+    # Format prompt using your existing prompts.py — unchanged from v1
+    prompts = format_policy_review_prompt(query, chunks)
+
+    messages = [
+        SystemMessage(content=prompts["system"]),
+        HumanMessage(content=prompts["user"]),
+    ]
+
+    try:
+        # with_structured_output handles JSON parsing + Pydantic validation
+        # Response is already a PolicyDecision object — no manual parsing needed
+        decision = structured_llm.invoke(messages)
+        raw_response = "structured output — no raw text"
+
+        print(f"[LLMGenerator] decision={decision.decision} | confidence={decision.confidence:.1%}")
+
+    except Exception as e:
+        print(f"[LLMGenerator] Error: {e}")
+        from src.generation.decision_schema import PolicyDecision
+        decision = PolicyDecision(
+            decision="unclear",
+            confidence=0.0,
+            policy_section="Generation Error",
+            citation_url="",
+            justification=f"LLM error: {str(e)}",
+            policy_quote="",
+            escalation_required=True,
+        )
+        raw_response = str(e)
+
+    # ── Observability ─────────────────────────────────────────────────────
+    latency = state.get("latency_ms") or {}
+    latency["llm_generator"] = round((time.time() - t0) * 1000, 1)
+
+    trace = state.get("node_trace") or []
+    trace.append("llm_generator")
+
+    return {
+        "decision": decision,
+        "raw_llm_response": raw_response,
+        "latency_ms": latency,
+        "node_trace": trace,
+    }
