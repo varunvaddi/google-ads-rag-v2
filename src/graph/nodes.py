@@ -98,3 +98,81 @@ def query_analyzer_node(state: RAGState) -> Dict[str, Any]:
         "latency_ms": latency,
         "node_trace": trace,
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Singleton loader — loads HybridSearch once, reuses across all queries
+# ─────────────────────────────────────────────────────────────────────────────
+
+_hybrid_search = None
+
+def _get_search():
+    """
+    Lazy singleton for HybridSearch.
+    First call: loads BGE + FAISS + BM25 (~20s)
+    All subsequent calls: returns cached instance instantly
+    """
+    global _hybrid_search
+    if _hybrid_search is None:
+        print("[Retriever] Loading HybridSearch (first time only)...")
+        from src.retrieval.hybrid_search import HybridSearch
+        _hybrid_search = HybridSearch()
+        print("[Retriever] HybridSearch loaded and cached")
+    return _hybrid_search
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node 2: Retriever
+# ─────────────────────────────────────────────────────────────────────────────
+
+def retriever_node(state: RAGState) -> Dict[str, Any]:
+    """
+    Runs hybrid search (BM25 + FAISS + RRF) on the query.
+    Uses expanded_query if query_analyzer produced one.
+
+    INPUT  (reads from state): expanded_query, query, retrieval_attempts, query_type
+    OUTPUT (writes to state):  retrieved_chunks, retrieval_attempts, latency_ms, node_trace
+
+    Your existing HybridSearch code is unchanged.
+    This node is just a clean wrapper around it.
+    """
+    t0 = time.time()
+    search = _get_search()
+
+    # Use expanded query if available, fall back to original
+    query = state.get("expanded_query") or state["query"]
+
+    # Track how many times retriever has run
+    attempts = state.get("retrieval_attempts", 0) + 1
+
+    # On second attempt (retry), fetch more chunks to cast wider net
+    if attempts == 1:
+        top_k = 5
+    else:
+        top_k = 8
+        print(f"[Retriever] Second attempt — widening to top_k={top_k}")
+
+    print(f"\n[Retriever] attempt={attempts}, top_k={top_k}")
+    print(f"[Retriever] query: '{query[:70]}...'")
+
+    chunks = search.search(query, top_k=top_k)
+
+    print(f"[Retriever] got {len(chunks)} chunks")
+    if chunks:
+        top_score = chunks[0].get("rerank_score", chunks[0].get("score", 0))
+        print(f"[Retriever] top chunk score: {top_score:.4f}")
+        top_hierarchy = " > ".join(chunks[0].get("metadata", {}).get("hierarchy", []))
+        print(f"[Retriever] top chunk: {top_hierarchy[:60]}")
+
+    # ── Observability ─────────────────────────────────────────────────────
+    latency = state.get("latency_ms") or {}
+    latency[f"retriever_attempt_{attempts}"] = round((time.time() - t0) * 1000, 1)
+
+    trace = state.get("node_trace") or []
+    trace.append(f"retriever_attempt_{attempts}")
+
+    return {
+        "retrieved_chunks": chunks,
+        "retrieval_attempts": attempts,
+        "latency_ms": latency,
+        "node_trace": trace,
+    }
