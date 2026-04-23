@@ -367,3 +367,188 @@ def llm_generator_node(state: RAGState) -> Dict[str, Any]:
         "latency_ms": latency,
         "node_trace": trace,
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node 5: Validator
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validator_node(state: RAGState) -> Dict[str, Any]:
+    """
+    Post-processes the LLM decision with three jobs:
+      1. Policy path override  — chunk hierarchy overrides LLM decision
+      2. Confidence recalc     — combines retrieval scores + LLM confidence
+      3. Escalation flag       — sets escalate=True if confidence < threshold
+
+    This is a safety net. Even if the LLM makes a wrong call,
+    the policy path override catches it deterministically.
+
+    INPUT  (reads from state): decision, reranked_chunks, retrieval_scores
+    OUTPUT (writes to state):  decision (updated), escalate, latency_ms, node_trace
+    """
+    t0 = time.time()
+
+    from src.generation.decision_schema import PolicyDecision
+
+    decision = state["decision"]
+    chunks = state.get("reranked_chunks") or state.get("retrieved_chunks", [])
+    scores = state.get("retrieval_scores", [])
+
+    print(f"\n[Validator] incoming decision={decision.decision} | confidence={decision.confidence:.1%}")
+
+    # ── 1. Policy path override ───────────────────────────────────────────
+    # Find the first NON-JUNK chunk to use for override decision
+    # Junk chunks = "Was this helpful?" UI remnants from scraping
+    JUNK_PHRASES = ["was this helpful", "was this article helpful"]
+
+    override_chunk = None
+    for chunk in chunks:
+        content = chunk.get("content", "").lower()
+        is_junk = any(phrase in content for phrase in JUNK_PHRASES)
+        if not is_junk:
+            override_chunk = chunk
+            break
+
+    # Only override if retrieval quality is strong enough to trust
+    # Low scores = no relevant policy found = likely allowed
+    OVERRIDE_SCORE_THRESHOLD = 0.002
+
+    top_score = scores[0] if scores else 0.0
+
+    if override_chunk and top_score >= OVERRIDE_SCORE_THRESHOLD:
+        hierarchy = override_chunk.get("metadata", {}).get("hierarchy", [])
+        policy_path = " ".join(hierarchy).lower()
+        print(f"[Validator] override chunk (score={top_score:.4f}): {' > '.join(hierarchy)}")
+
+        if "prohibited content" in policy_path or "prohibited practices" in policy_path:
+            if decision.decision != "disallowed":
+                print(f"[Validator] OVERRIDE: {decision.decision} → disallowed (Prohibited Content)")
+                decision.decision = "disallowed"
+
+        elif "restricted content" in policy_path:
+            if decision.decision not in ("restricted", "disallowed"):
+                print(f"[Validator] OVERRIDE: {decision.decision} → restricted (Restricted Content)")
+                decision.decision = "restricted"
+        else:
+            print(f"[Validator] No override needed")
+
+    elif top_score < OVERRIDE_SCORE_THRESHOLD:
+        print(f"[Validator] Score {top_score:.4f} too low — skipping override, trusting LLM")
+    else:
+        print(f"[Validator] All chunks are junk — skipping override")
+
+    # ── 2. Confidence recalculation ───────────────────────────────────────
+    # Same formula as v1 calculate_confidence() — now in validator node
+    # Combines 4 factors:
+    #   retrieval_factor : how good were the retrieved chunks?
+    #   clarity_factor   : how clear is the decision?
+    #   multi_source     : how many high-quality chunks agree?
+    #   llm_confidence   : what did the LLM say its confidence was?
+
+    if scores and len(scores) >= 2:
+        margin = scores[0] - scores[1]
+        if margin > 0.002:
+            retrieval_factor = 0.8
+        elif margin > 0.001:
+            retrieval_factor = 0.65
+        elif margin > 0.0005:
+            retrieval_factor = 0.5
+        else:
+            retrieval_factor = 0.35
+
+        if scores[0] > 0.003:
+            retrieval_factor = min(1.0, retrieval_factor + 0.1)
+    elif scores:
+        retrieval_factor = 0.5
+    else:
+        retrieval_factor = 0.3
+
+    clarity = 0.8 if decision.decision != "unclear" else 0.3
+    high_quality_count = sum(1 for s in scores[:3] if s > 0.002)
+    multi_source = high_quality_count / 3
+
+    llm_conf = getattr(decision, "confidence", 0.5)
+    # Clamp LLM confidence to 0-1 in case model returned 90 instead of 0.9
+    if llm_conf > 1.0:
+        llm_conf = llm_conf / 100.0
+    llm_conf = max(0.0, min(1.0, llm_conf))
+
+    final_confidence = (
+        retrieval_factor * 0.25
+        + clarity       * 0.25
+        + multi_source  * 0.15
+        + llm_conf      * 0.35
+    )
+    final_confidence = round(max(0.0, min(1.0, final_confidence)), 4)
+
+    print(f"[Validator] confidence: {decision.confidence:.1%} → {final_confidence:.1%}")
+    decision.confidence = final_confidence
+
+    # ── 3. Escalation routing ─────────────────────────────────────────────
+    # If confidence is below threshold → flag for human review
+    ESCALATION_THRESHOLD = 0.70
+    escalate = final_confidence < ESCALATION_THRESHOLD or decision.decision == "unclear"
+    decision.escalation_required = escalate
+
+    print(f"[Validator] final: decision={decision.decision} | confidence={final_confidence:.1%} | escalate={escalate}")
+
+    # ── Observability ─────────────────────────────────────────────────────
+    latency = state.get("latency_ms") or {}
+    latency["validator"] = round((time.time() - t0) * 1000, 1)
+
+    trace = state.get("node_trace") or []
+    trace.append("validator")
+
+    return {
+        "decision": decision,
+        "escalate": escalate,
+        "latency_ms": latency,
+        "node_trace": trace,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node 6: Escalation Handler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def escalation_node(state: RAGState) -> Dict[str, Any]:
+    """
+    Handles low-confidence decisions.
+    In production: writes to a review queue, sends a Slack alert, etc.
+    For now: logs the escalation and updates the justification.
+
+    INPUT  (reads from state): decision
+    OUTPUT (writes to state):  decision (updated), node_trace
+    """
+    decision = state["decision"]
+
+    print(f"\n[Escalation] 🚨 Routing for human review")
+    print(f"[Escalation] decision={decision.decision} | confidence={decision.confidence:.1%}")
+
+    # Tag the justification so reviewers know why it was escalated
+    decision.justification = (
+        f"[ESCALATED — confidence {decision.confidence:.1%} below threshold] "
+        + decision.justification
+    )
+    decision.escalation_required = True
+
+    trace = state.get("node_trace") or []
+    trace.append("escalation")
+
+    return {
+        "decision": decision,
+        "node_trace": trace,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditional Edge: after validator, escalate or finish?
+# ─────────────────────────────────────────────────────────────────────────────
+
+def should_escalate(state: RAGState) -> str:
+    """
+    Called by LangGraph after validator_node.
+    Returns "escalation" or "end" — LangGraph routes accordingly.
+    """
+    if state.get("escalate", False):
+        return "escalation"
+    return "end"
