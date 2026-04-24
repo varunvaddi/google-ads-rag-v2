@@ -75,8 +75,16 @@ def query_analyzer_node(state: RAGState) -> Dict[str, Any]:
         expanded_query += " unreliable claims improbable result misrepresentation"
     elif "miracle" in query_lower or "cure" in query_lower:
         expanded_query += " unapproved health claims prohibited medical treatment"
-    elif "crypto" in query_lower or "bitcoin" in query_lower:
+    elif "crypto" in query_lower or "bitcoin" in query_lower or "ethereum" in query_lower:
         expanded_query += " cryptocurrency digital currency financial services"
+    elif any(w in query_lower for w in ["whiskey", "beer", "wine", "alcohol", "spirits", "liquor"]):
+        expanded_query += " alcohol restricted content age-gating requirements"
+    elif any(w in query_lower for w in ["vote", "election", "political", "candidate"]):
+        expanded_query += " political content election ads restricted verification"
+    elif any(w in query_lower for w in ["gambling", "casino", "betting", "poker"]):
+        expanded_query += " gambling games restricted content wagering"
+    elif any(w in query_lower for w in ["pharmacy", "prescription", "medication"]):
+        expanded_query += " pharmaceutical drugs healthcare restricted content"
 
     was_expanded = expanded_query != query
 
