@@ -277,112 +277,125 @@ class FullEvaluator:
 
     def evaluate_ragas(self, max_samples: int = 20) -> Dict[str, Any]:
         """
-        Runs RAGAS evaluation using the auto-generated dataset.
-        Uses Ollama as judge — fully local, no API needed.
+        Custom LLM-judge metrics — RAGAS-equivalent, no dependency needed.
+        Uses Ollama llama3.2 as judge. Fully local, no API key, no conflicts.
 
-        RAGAS works by:
-          1. Taking your question + answer + retrieved contexts + ground truth
-          2. Using an LLM to judge quality across 4 dimensions
-          3. Returning scores 0.0-1.0 for each dimension
-
-        Args:
-            max_samples: Cap to keep runtime reasonable
-                         20 samples ≈ 10-15 min on CPU
+        Metrics:
+          Faithfulness      — does answer only use info from retrieved chunks?
+          Answer Relevancy  — is the answer relevant to the question?
+          Context Recall    — do chunks contain the ground truth?
+          Context Precision — are retrieved chunks all relevant?
         """
         print("\n" + "=" * 65)
-        print("SECTION 3: RAGAS METRICS")
+        print("SECTION 3: LLM-JUDGE METRICS (custom RAGAS-equivalent)")
         print("=" * 65)
 
         if not self.eval_dataset_path.exists():
             print(f"⚠️  No eval dataset at {self.eval_dataset_path}")
-            print(f"   Run first: python src/evaluation/dataset_generator.py")
             return {}
+
+        from langchain_ollama import ChatOllama
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        judge = ChatOllama(model="llama3.2", temperature=0)
+
+        def score(prompt: str) -> float:
+            """Ask the judge LLM to score something 0.0-1.0."""
+            try:
+                response = judge.invoke([
+                    SystemMessage(content="You are an evaluation judge. Respond with ONLY a decimal number between 0.0 and 1.0. Nothing else."),
+                    HumanMessage(content=prompt),
+                ])
+                val = float(response.content.strip())
+                return round(max(0.0, min(1.0, val)), 4)
+            except Exception:
+                return 0.0
 
         with open(self.eval_dataset_path) as f:
             raw_dataset = json.load(f)
 
         samples = raw_dataset[:max_samples]
-        print(f"Running RAGAS on {len(samples)} samples...")
-        print("(Uses Ollama locally as judge — takes 10-15 min on CPU)\n")
+        print(f"Evaluating {len(samples)} samples with llama3.2 judge...\n")
 
-        # Build RAGAS rows — run pipeline on each question
-        ragas_rows = []
+        faithfulness_scores    = []
+        relevancy_scores       = []
+        context_recall_scores  = []
+        context_precision_scores = []
+
         for i, sample in enumerate(samples, 1):
-            print(f"  [{i:02d}/{len(samples)}] {sample['question'][:60]}")
+            print(f"  [{i:02d}/{len(samples)}] {sample['question'][:55]}")
             try:
-                # Get pipeline answer
-                decision = self.pipeline.run(sample["question"])
-                answer = decision.justification or decision.decision
-
-                # Get retrieved contexts for this question
+                decision  = self.pipeline.run(sample["question"])
+                answer    = decision.justification or decision.decision
                 retrieved = self.search.search(sample["question"], top_k=5)
-                contexts  = [c["content"] for c in retrieved]
+                contexts  = "\n---\n".join(c["content"] for c in retrieved)
+                ground_truth = sample["ground_truth"]
+                question     = sample["question"]
 
-                ragas_rows.append({
-                    "question":    sample["question"],
-                    "answer":      answer,
-                    "contexts":    contexts,
-                    "ground_truth": sample["ground_truth"],
-                })
+                # Faithfulness
+                f_score = score(
+                    f"Context:\n{contexts}\n\n"
+                    f"Answer:\n{answer}\n\n"
+                    f"Score 0.0-1.0: how faithfully does the answer stick to "
+                    f"ONLY information in the context? "
+                    f"1.0=fully grounded in context, 0.0=hallucinated."
+                )
+
+                # Answer Relevancy
+                r_score = score(
+                    f"Question:\n{question}\n\n"
+                    f"Answer:\n{answer}\n\n"
+                    f"Score 0.0-1.0: how relevant is the answer to the question? "
+                    f"1.0=directly answers it, 0.0=completely off-topic."
+                )
+
+                # Context Recall
+                cr_score = score(
+                    f"Ground truth:\n{ground_truth}\n\n"
+                    f"Retrieved contexts:\n{contexts}\n\n"
+                    f"Score 0.0-1.0: what fraction of the ground truth "
+                    f"is covered by the retrieved contexts? "
+                    f"1.0=fully covered, 0.0=not covered at all."
+                )
+
+                # Context Precision
+                cp_score = score(
+                    f"Question:\n{question}\n\n"
+                    f"Retrieved contexts:\n{contexts}\n\n"
+                    f"Score 0.0-1.0: what fraction of the retrieved contexts "
+                    f"are relevant to answering the question? "
+                    f"1.0=all relevant, 0.0=none relevant."
+                )
+
+                faithfulness_scores.append(f_score)
+                relevancy_scores.append(r_score)
+                context_recall_scores.append(cr_score)
+                context_precision_scores.append(cp_score)
+
+                print(f"         faith={f_score:.2f} rel={r_score:.2f} "
+                      f"c_recall={cr_score:.2f} c_prec={cp_score:.2f}")
+
             except Exception as e:
                 print(f"         ⚠️  skipped: {e}")
 
-        if not ragas_rows:
-            print("❌ No valid samples")
-            return {}
+        if not faithfulness_scores:
+            return {"error": "No samples evaluated"}
 
-        # Run RAGAS
-        try:
-            from datasets import Dataset
-            from ragas import evaluate
-            from ragas.metrics import (
-                faithfulness,
-                answer_relevancy,
-                context_recall,
-                context_precision,
-            )
-            from langchain_ollama import ChatOllama
-            from langchain_ollama import OllamaEmbeddings
+        summary = {
+            "faithfulness":      round(float(np.mean(faithfulness_scores)),      4),
+            "answer_relevancy":  round(float(np.mean(relevancy_scores)),         4),
+            "context_recall":    round(float(np.mean(context_recall_scores)),    4),
+            "context_precision": round(float(np.mean(context_precision_scores)), 4),
+            "n_samples":         len(faithfulness_scores),
+        }
 
-            hf_dataset = Dataset.from_list(ragas_rows)
+        print(f"\n📊 LLM-Judge Results:")
+        print(f"   Faithfulness:      {summary['faithfulness']:.4f}")
+        print(f"   Answer Relevancy:  {summary['answer_relevancy']:.4f}")
+        print(f"   Context Recall:    {summary['context_recall']:.4f}")
+        print(f"   Context Precision: {summary['context_precision']:.4f}")
 
-            # Use Ollama as judge — same model, fully local
-            ragas_llm        = ChatOllama(model="llama3.2", temperature=0)
-            ragas_embeddings = OllamaEmbeddings(model="nomic-embed-text")
-
-            result = evaluate(
-                dataset    = hf_dataset,
-                metrics    = [
-                    faithfulness,
-                    answer_relevancy,
-                    context_recall,
-                    context_precision,
-                ],
-                llm         = ragas_llm,
-                embeddings  = ragas_embeddings,
-                raise_exceptions=False,
-            )
-
-            scores = result.to_pandas().mean().to_dict()
-            summary = {
-                "faithfulness":      round(float(scores.get("faithfulness",      0)), 4),
-                "answer_relevancy":  round(float(scores.get("answer_relevancy",  0)), 4),
-                "context_recall":    round(float(scores.get("context_recall",    0)), 4),
-                "context_precision": round(float(scores.get("context_precision", 0)), 4),
-                "n_samples":         len(ragas_rows),
-            }
-
-            print(f"\n📊 RAGAS Results:")
-            print(f"   Faithfulness:      {summary['faithfulness']:.4f}")
-            print(f"   Answer Relevancy:  {summary['answer_relevancy']:.4f}")
-            print(f"   Context Recall:    {summary['context_recall']:.4f}")
-            print(f"   Context Precision: {summary['context_precision']:.4f}")
-
-            return summary
-
-        except Exception as e:
-            print(f"❌ RAGAS error: {e}")
-            return {"error": str(e)}
+        return summary
 
     # ─────────────────────────────────────────────────────────────────────
     # Section 4: Full Run + Save
@@ -456,8 +469,8 @@ def main():
     evaluator = FullEvaluator()
     # Skip RAGAS first run — just verify retrieval + decisions work
     # Then rerun with run_ragas=True for full metrics
-    evaluator.run_full_evaluation(run_ragas=False)
-
+    #evaluator.run_full_evaluation(run_ragas=False)
+    evaluator.run_full_evaluation(run_ragas=True, ragas_samples=20)
 
 if __name__ == "__main__":
     main()
