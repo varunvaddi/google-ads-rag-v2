@@ -44,6 +44,7 @@ def query_analyzer_node(state: RAGState) -> Dict[str, Any]:
         "miracle", "cure", "guaranteed return", "100% profit",
         "no prescription", "counterfeit", "fake", "get rich quick",
         "lose weight fast", "instant cure", "risk-free",
+        "forex secrets", "trading secrets", "rich quick",
     ]
     BORDERLINE_SIGNALS = [
         "crypto", "bitcoin", "ethereum", "alcohol", "whiskey",
@@ -85,6 +86,8 @@ def query_analyzer_node(state: RAGState) -> Dict[str, Any]:
         expanded_query += " gambling games restricted content wagering"
     elif any(w in query_lower for w in ["pharmacy", "prescription", "medication"]):
         expanded_query += " pharmaceutical drugs healthcare restricted content"
+    elif any(w in query_lower for w in ["forex", "rich quick", "trading secrets"]):
+        expanded_query += " unreliable claims misrepresentation improbable results prohibited"
 
     was_expanded = expanded_query != query
 
