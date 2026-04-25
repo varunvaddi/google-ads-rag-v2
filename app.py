@@ -23,63 +23,157 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# CSS — warm beige / chocolate / pastel brown theme
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+    /* ── Force light mode + beige background ── */
+    .stApp {
+        background-color: #f5f0e8 !important;
+    }
+    .stApp * {
+        color: #3d2b1f !important;
+    }
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {
+        background-color: #ede4d3 !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: #3d2b1f !important;
+    }
+
+    /* ── Main content area ── */
+    [data-testid="stMainBlockContainer"] {
+        background-color: #f5f0e8 !important;
+    }
+
+    /* ── Tabs ── */
+    [data-testid="stTabs"] {
+        background-color: #f5f0e8 !important;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #ede4d3 !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #3d2b1f !important;
+    }
+
+    /* ── Text area + inputs ── */
+    .stTextArea textarea {
+        background-color: #faf6f0 !important;
+        color: #3d2b1f !important;
+        border: 1px solid #c8a882 !important;
+    }
+
+    /* ── Buttons ── */
+    .stButton button {
+        background-color: #c8a882 !important;
+        color: #3d2b1f !important;
+        border: none !important;
+    }
+    .stButton button:hover {
+        background-color: #a87850 !important;
+        color: #f5f0e8 !important;
+    }
+
+    /* ── Primary button ── */
+    .stButton button[kind="primary"] {
+        background-color: #e8761a !important;
+        color: #ffffff !important;
+    }
+    .stButton button[kind="primary"]:hover {
+        background-color: #c85e10 !important;
+    }
+
+    /* ── Expanders ── */
+    [data-testid="stExpander"] {
+        background-color: #ede4d3 !important;
+        border: 1px solid #c8a882 !important;
+    }
+
+    /* ── Metrics ── */
+    [data-testid="metric-container"] {
+        background-color: #ede4d3 !important;
+        border-radius: 8px !important;
+        padding: 0.5rem !important;
+    }
+    [data-testid="metric-container"] * {
+        color: #3d2b1f !important;
+    }
+
+    /* ── Info/warning boxes ── */
+    [data-testid="stAlert"] {
+        background-color: #f0e6d4 !important;
+        color: #3d2b1f !important;
+    }
+
+    /* ── Divider ── */
+    hr {
+        border-color: #c8a882 !important;
+    }
+
+    /* ── Headers ── */
     .main-header {
         font-size: 3rem;
         font-weight: bold;
         text-align: center;
         margin-bottom: 0.5rem;
+        color: #3d2b1f !important;
     }
     .sub-header {
         text-align: center;
-        color: #666;
+        color: #7a5c44 !important;
         margin-bottom: 2rem;
     }
+
+    /* ── Decision banners ── */
     .decision-allowed {
-        background-color: #d4edda;
-        border-left: 4px solid #28a745;
+        background-color: #d6ead6 !important;
+        border-left: 4px solid #5a8a5a;
         padding: 1rem;
-        border-radius: 4px;
-        color: #000000;
+        border-radius: 6px;
+        color: #1a3a1a !important;
     }
     .decision-restricted {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
+        background-color: #f5e6c8 !important;
+        border-left: 4px solid #c8883a;
         padding: 1rem;
-        border-radius: 4px;
-        color: #000000;
+        border-radius: 6px;
+        color: #3a2a0a !important;
     }
     .decision-disallowed {
-        background-color: #f8d7da;
-        border-left: 4px solid #dc3545;
+        background-color: #f0d4cc !important;
+        border-left: 4px solid #a84a3a;
         padding: 1rem;
-        border-radius: 4px;
-        color: #000000;
+        border-radius: 6px;
+        color: #3a0a0a !important;
     }
     .decision-unclear {
-        background-color: #e2e3e5;
-        border-left: 4px solid #6c757d;
+        background-color: #e8e0d4 !important;
+        border-left: 4px solid #8a7a6a;
         padding: 1rem;
-        border-radius: 4px;
-        color: #000000;
+        border-radius: 6px;
+        color: #3a3028 !important;
     }
+
+    /* ── LangGraph trace box ── */
     .trace-box {
-        background-color: #1e1e1e;
-        color: #00ff88;
+        background-color: #3d2b1f;
+        color: #d4a96a !important;
         padding: 0.8rem 1rem;
         border-radius: 6px;
         font-family: monospace;
         font-size: 0.85rem;
         margin-top: 0.5rem;
     }
+
+    /* ── Node badges ── */
     .node-badge {
         display: inline-block;
-        background: #2d2d2d;
-        color: #4f8bf9;
-        border: 1px solid #4f8bf9;
+        background: #5c3d28;
+        color: #f0d4a8 !important;
+        border: 1px solid #c8883a;
         border-radius: 12px;
         padding: 2px 10px;
         font-size: 0.78rem;
@@ -155,30 +249,28 @@ with tab1:
     def set_example(text):
         st.session_state.ad_text = text
 
-    col1, col2 = st.columns([3, 1])
+    # ── Text area (full width) ─────────────────────────────────────────────
+    ad_text = st.text_area(
+        "Enter ad text to review:",
+        placeholder="Example: Lose 15 pounds in one week with this miracle pill!",
+        height=100,
+        key="ad_text",
+    )
 
-    with col1:
-        ad_text = st.text_area(
-            "Enter ad text to review:",
-            placeholder="Example: Lose 15 pounds in one week with this miracle pill!",
-            height=120,
-            key="ad_text",
-        )
-
-    with col2:
-        st.markdown("### Quick Examples")
-        st.button("🏥 Miracle Pill",   on_click=set_example,
-                  args=("Lose 15 pounds in one week with this miracle pill! Guaranteed!",))
-        st.button("💰 Crypto",         on_click=set_example,
-                  args=("Learn crypto trading from certified experts!",))
-        st.button("📱 Product",        on_click=set_example,
-                  args=("Buy our new smartphone - 5G, free shipping over $50",))
-        st.button("🍷 Alcohol",        on_click=set_example,
-                  args=("Premium craft whiskey delivered to your door. 21+ only.",))
-        st.button("📈 Forex Scam",     on_click=set_example,
-                  args=("Get rich quick with forex trading secrets!",))
-        st.button("💊 Pharmacy",       on_click=set_example,
-                  args=("Online pharmacy - no prescription needed!",))
+    # ── Quick examples — horizontal row ───────────────────────────────────
+    st.markdown("**Quick Examples:**")
+    ex_cols = st.columns(6)
+    examples_list = [
+        ("🏥 Miracle Pill", "Lose 15 pounds in one week with this miracle pill! Guaranteed!"),
+        ("💰 Crypto",       "Learn crypto trading from certified experts!"),
+        ("📱 Product",      "Buy our new smartphone - 5G, free shipping over $50"),
+        ("🍷 Alcohol",      "Premium craft whiskey delivered to your door. 21+ only."),
+        ("📈 Forex Scam",   "Get rich quick with forex trading secrets!"),
+        ("💊 Pharmacy",     "Online pharmacy - no prescription needed!"),
+    ]
+    for col, (label, text) in zip(ex_cols, examples_list):
+        with col:
+            st.button(label, on_click=set_example, args=(text,), use_container_width=True)
 
     # ── Review button ──────────────────────────────────────────────────────
     if st.button("🔍 Review Ad", type="primary", use_container_width=True):
@@ -188,14 +280,12 @@ with tab1:
             pipeline = load_pipeline()
 
             with st.spinner("Running LangGraph pipeline..."):
-                # Capture the pipeline's internal state for display
                 import io, contextlib
 
                 log_buffer = io.StringIO()
                 start = time.time()
 
                 with contextlib.redirect_stdout(log_buffer):
-                    # Run the full graph
                     initial_state = pipeline._make_initial_state(ad_text)
                     final_state   = pipeline.graph.invoke(initial_state)
 
@@ -271,7 +361,7 @@ with tab1:
                 st.markdown(f"**Query type:** `{final_state.get('query_type', 'unknown')}`")
                 expanded = final_state.get("expanded_query", "")
                 if expanded and expanded != ad_text:
-                    st.markdown(f"**Expanded query:**")
+                    st.markdown("**Expanded query:**")
                     st.code(expanded)
                 else:
                     st.markdown("No query expansion applied")
@@ -318,7 +408,6 @@ with tab2:
 with tab3:
     st.header("📈 System Metrics")
 
-    # Load eval results if available
     results_path = Path("evaluation/evaluation_results.json")
     if results_path.exists():
         with open(results_path) as f:
@@ -351,8 +440,8 @@ with tab3:
 
         st.subheader("📊 v1 vs v2 Comparison")
         comparison = {
-            "Metric":            ["Decision Accuracy", "Avg Confidence", "Escalation Rate", "Recall@5"],
-            "v1 (Gemini)":       ["80%",               "29%",            "100%",             "77.8%"],
+            "Metric":                ["Decision Accuracy", "Avg Confidence", "Escalation Rate", "Recall@5"],
+            "v1 (Gemini)":           ["80%",               "29%",            "100%",             "77.8%"],
             "v2 (Ollama+LangGraph)": [
                 f"{dec.get('decision_accuracy', 0):.0%}",
                 f"{dec.get('avg_confidence', 0):.0%}",
@@ -376,7 +465,7 @@ with tab3:
     - ➕ Conditional retry logic (low quality retrieval → retry)
     - ➕ Full eval suite with 8 metrics
     - ➕ Auto-generated eval dataset via Ollama
-    
+
     **What stayed the same (already production-grade):**
     - BGE-large-en-v1.5 embeddings (1024-dim)
     - FAISS vector store
@@ -391,7 +480,7 @@ with tab3:
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
-    "<p style='text-align:center;color:#666'>"
+    "<p style='text-align:center;color:#7a5c44'>"
     "Google Ads Policy RAG v2 · LangGraph + Ollama + BGE-large + FAISS + BM25 · "
     "316 clean policy chunks · Built by Varun Vaddi"
     "</p>",
