@@ -13,6 +13,22 @@ import json
 sys.path.insert(0, str(Path(__file__).parent))
 from src.graph.pipeline import RAGPipeline
 
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+
+def ensure_embeddings():
+    embeddings_dir = Path("data/embeddings")
+    embeddings_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ["bm25.pkl", "embeddings.npy", "faiss.index", "metadata.json"]:
+        if not (embeddings_dir / filename).exists():
+            hf_hub_download(
+                repo_id="varunvaddi/google-ads-rag-embeddings",
+                filename=filename,
+                repo_type="dataset",
+                local_dir=str(embeddings_dir),
+            )
+ensure_embeddings()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
